@@ -1,0 +1,288 @@
+import re
+import sys
+
+# --- GLOBAL CONSTANTS ---
+RANKS = "87654321"  # Row indices (0-7) mapped to FIDE ranks
+FILES = "abcdefgh"  # Col indices (0-7) mapped to FIDE files
+EMPTY_SQUARE = '.'
+
+# Piece representation (Uppercase = White, Lowercase = Black)
+PIECES = {
+    'R': '♜', 'N': '♞', 'B': '♝', 'Q': '♛', 'K': '♚', 'P': '♟',
+    'r': '♖', 'n': '♘', 'b': '♗', 'q': '♕', 'k': '♔', 'p': '♙',
+    '.': ' '
+}
+
+# --- COORDINATE & INPUT CONVERSION ---
+
+def to_coords(square):
+    """Converts algebraic notation (e.g., 'a1', 'e4') to (row, col) coordinates."""
+    if len(square) != 2 or square[0] not in FILES or square[1] not in RANKS:
+        return None
+    
+    col = FILES.index(square[0])
+    row = RANKS.index(square[1])
+    return (row, col)
+
+def to_algebraic(row, col):
+    """Converts (row, col) coordinates to algebraic notation (e.g., 'a1')."""
+    if 0 <= row < 8 and 0 <= col < 8:
+        return FILES[col] + RANKS[row]
+    return None
+
+def parse_move_input(input_str):
+    """Parses move input 'e2 e4' into (start_row, start_col, end_row, end_col)."""
+    # Regex to match two algebraic notations separated by space
+    match = re.fullmatch(r"([a-h][1-8])\s+([a-h][1-8])", input_str.strip().lower())
+    
+    if not match:
+        return None, None
+    
+    start_square = match.group(1)
+    end_square = match.group(2)
+    
+    start_coords = to_coords(start_square)
+    end_coords = to_coords(end_square)
+    
+    if start_coords and end_coords:
+        return (*start_coords, *end_coords)
+    return None, None
+
+# --- BOARD & DISPLAY ---
+
+def initialize_board():
+    """Sets up the initial chess board state."""
+    board = [
+        ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+        ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+        [EMPTY_SQUARE] * 8,
+        [EMPTY_SQUARE] * 8,
+        [EMPTY_SQUARE] * 8,
+        [EMPTY_SQUARE] * 8,
+        ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+        ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+    ]
+    return board
+
+def display_board(board):
+    """Prints the board to the console with ranks and files."""
+    print("\n   a b c d e f g h")
+    print("  -----------------")
+    for i in range(8):
+        # Use white/black background for checkered effect (terminal support dependent)
+        row_display = f"{RANKS[i]} |"
+        for j in range(8):
+            piece_symbol = PIECES.get(board[i][j], '?')
+            # Alternate background colors for readability
+            bg_color = "\033[47m" if (i + j) % 2 == 0 else "\033[40m"
+            fg_color = "\033[30m" if board[i][j].isupper() else "\033[37m"
+            row_display += f"{bg_color}{fg_color} {piece_symbol} \033[0m"
+        print(f"{row_display} | {RANKS[i]}")
+    print("  -----------------")
+    print("   a b c d e f g h\n")
+
+# --- MOVE VALIDATION HELPERS ---
+
+def is_on_board(r, c):
+    """Checks if coordinates (r, c) are within the 8x8 board boundaries."""
+    return 0 <= r < 8 and 0 <= c < 8
+
+def is_same_color(piece1, piece2):
+    """Checks if two pieces are of the same color (both upper or both lower)."""
+    if piece1 == EMPTY_SQUARE or piece2 == EMPTY_SQUARE:
+        return False
+    return piece1.isupper() == piece2.isupper()
+
+def get_piece_color(piece):
+    """Returns 'White' or 'Black' based on piece case."""
+    if piece == EMPTY_SQUARE:
+        return None
+    return 'White' if piece.isupper() else 'Black'
+
+def is_valid_line_move(board, sr, sc, er, ec, is_diagonal):
+    """
+    Checks path for Rook/Bishop/Queen movement:
+    1. Ensures straight line (rook) or diagonal line (bishop).
+    2. Checks for obstacles.
+    3. Ensures destination is not self-occupied.
+    """
+    dr = er - sr
+    dc = ec - sc
+    
+    if is_diagonal:
+        if abs(dr) != abs(dc) or dr == 0:
+            return False  # Not a diagonal move
+    else: # Straight move
+        if not ((dr == 0 and dc != 0) or (dr != 0 and dc == 0)):
+            return False # Not a straight move
+            
+    # Direction vectors
+    step_r = 0 if dr == 0 else (1 if dr > 0 else -1)
+    step_c = 0 if dc == 0 else (1 if dc > 0 else -1)
+
+    # Check for obstacles along the path
+    r, c = sr + step_r, sc + step_c
+    while r != er or c != ec:
+        if board[r][c] != EMPTY_SQUARE:
+            return False  # Obstacle found
+        r += step_r
+        c += step_c
+        
+    return True
+
+# --- CORE MOVE VALIDATION ---
+
+def is_move_legal(board, sr, sc, er, ec, current_player):
+    """
+    Checks if a move is legal based on piece-specific rules (simplified).
+    This function ignores check/checkmate rules.
+    """
+    if not is_on_board(sr, sc) or not is_on_board(er, ec):
+        print("Error: Coordinates are off the board.")
+        return False
+        
+    start_piece = board[sr][sc]
+    end_piece = board[er][ec]
+    
+    # 1. Check if starting square is empty
+    if start_piece == EMPTY_SQUARE:
+        print(f"Error: No piece at {to_algebraic(sr, sc)}.")
+        return False
+
+    # 2. Check if the piece belongs to the current player
+    piece_color = get_piece_color(start_piece)
+    if piece_color != current_player:
+        print(f"Error: It is {current_player}'s turn, but you selected a {piece_color} piece.")
+        return False
+
+    # 3. Check if destination is occupied by own piece
+    if end_piece != EMPTY_SQUARE and is_same_color(start_piece, end_piece):
+        print("Error: Cannot capture your own piece.")
+        return False
+
+    # --- Piece-Specific Movement Logic ---
+    piece_type = start_piece.upper()
+    dr = er - sr
+    dc = ec - sc
+
+    if piece_type == 'P': # Pawn
+        is_white = start_piece.isupper()
+        direction = -1 if is_white else 1 # White moves -1 row, Black moves +1 row
+
+        # Normal one-step move forward
+        if dc == 0 and dr == direction and end_piece == EMPTY_SQUARE:
+            return True
+        
+        # Initial two-step move forward
+        start_rank = 6 if is_white else 1 # Row 6 for White, Row 1 for Black
+        if sr == start_rank and dc == 0 and dr == 2 * direction and end_piece == EMPTY_SQUARE:
+            # Check for obstacle in the intermediate square
+            if board[sr + direction][sc] == EMPTY_SQUARE:
+                return True
+        
+        # Capture diagonally
+        if abs(dc) == 1 and dr == direction and end_piece != EMPTY_SQUARE and not is_same_color(start_piece, end_piece):
+            return True
+            
+        return False # Invalid pawn move
+
+    elif piece_type == 'R': # Rook (Straight lines)
+        is_straight = (dr == 0 and dc != 0) or (dr != 0 and dc == 0)
+        if is_straight:
+            return is_valid_line_move(board, sr, sc, er, ec, is_diagonal=False)
+        return False
+
+    elif piece_type == 'B': # Bishop (Diagonal lines)
+        is_diagonal = abs(dr) == abs(dc) and dr != 0
+        if is_diagonal:
+            return is_valid_line_move(board, sr, sc, er, ec, is_diagonal=True)
+        return False
+        
+    elif piece_type == 'Q': # Queen (Straight or Diagonal lines)
+        is_straight = (dr == 0 and dc != 0) or (dr != 0 and dc == 0)
+        is_diagonal = abs(dr) == abs(dc) and dr != 0
+        
+        if is_straight:
+            return is_valid_line_move(board, sr, sc, er, ec, is_diagonal=False)
+        if is_diagonal:
+            return is_valid_line_move(board, sr, sc, er, ec, is_diagonal=True)
+        return False
+
+    elif piece_type == 'K': # King (One step in any direction)
+        return abs(dr) <= 1 and abs(dc) <= 1
+
+    elif piece_type == 'N': # Knight ('L' shape movement)
+        # 1 vertical, 2 horizontal OR 2 vertical, 1 horizontal
+        return (abs(dr) == 2 and abs(dc) == 1) or (abs(dr) == 1 and abs(dc) == 2)
+
+    return False
+
+# --- GAME LOGIC ---
+
+def make_move(board, sr, sc, er, ec):
+    """Executes a move on the board."""
+    piece = board[sr][sc]
+    
+    # 1. Move the piece to the new square (capturing if necessary)
+    board[er][ec] = piece
+    
+    # 2. Clear the starting square
+    board[sr][sc] = EMPTY_SQUARE
+
+def run_game():
+    """Main game loop."""
+    board = initialize_board()
+    current_player = 'White'
+    
+    print("Welcome to Simple Console Chess!")
+    print("Instructions: Enter moves in algebraic notation (e.g., 'e2 e4').")
+    print("Type 'quit' or 'exit' to end the game.")
+    
+    while True:
+        display_board(board)
+        
+        try:
+            prompt = f"It's {current_player}'s turn. Enter your move (e.g., a2 a4): "
+            user_input = input(prompt).strip()
+            
+            if user_input.lower() in ['quit', 'exit']:
+                print("Thanks for playing! Goodbye.")
+                sys.exit()
+
+            # Parse input to coordinates
+            move_coords = parse_move_input(user_input)
+            if move_coords is None:
+                print("Invalid input format. Please use 'StartSquare EndSquare' (e.g., e2 e4).")
+                continue
+
+            sr, sc, er, ec = move_coords
+            
+            # Validate move
+            if is_move_legal(board, sr, sc, er, ec, current_player):
+                
+                # Execute move
+                make_move(board, sr, sc, er, ec)
+                
+                # Switch player
+                current_player = 'Black' if current_player == 'White' else 'White'
+                
+            else:
+                print("Illegal move according to basic piece rules. Try again.")
+
+        except EOFError:
+            print("\nGame ended by EOF. Goodbye.")
+            sys.exit()
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}. Please try again.")
+
+if __name__ == "__main__":
+    # Ensure correct display of UTF-8 characters
+    # This might be needed in some console environments
+    try:
+        if sys.stdout.reconfigure:
+            sys.stdout.reconfigure(encoding='utf-8')
+    except AttributeError:
+        # Reconfigure might not exist in older Python versions or specific environments
+        pass
+        
+    run_game()
